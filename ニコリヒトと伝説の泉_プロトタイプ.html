@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>ニコリヒトと伝説の泉 – プロトタイプ</title>
+<style>
+  html, body { margin:0; height:100%; background:#000; color:#fff; font-family:system-ui, -apple-system, "Segoe UI", Roboto, "ヒラギノ角ゴ ProN", "Noto Sans JP", sans-serif; }
+  #game { display:block; background:#000; }
+  .center { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; pointer-events:none; }
+  .title { pointer-events:auto; flex-direction:column; gap:18px; font-weight:700; letter-spacing:.02em; animation: pop .6s ease both; }
+  .title h1 { margin:0; font-size: clamp(24px, 6vw, 56px); }
+  .title .sub { opacity:.8; font-size: clamp(12px, 2.8vw, 16px); }
+  .title .press { margin-top:6px; opacity:.75; font-size: clamp(12px, 3.5vw, 18px); }
+  @keyframes pop { from{ transform:scale(.96); opacity:0 } to{ transform:scale(1); opacity:1 } }
+
+  .prologueText { font-size: clamp(16px, 3.8vw, 22px); line-height:1.9; max-width:min(90vw, 820px); padding:0 18px; text-shadow:0 0 12px rgba(255,255,255,.12); }
+  .fade { position:fixed; inset:0; background:#000; pointer-events:none; opacity:0; transition:opacity .6s ease; }
+
+  /* モバイルDパッド（簡易） */
+  .pad { position:fixed; bottom:3vmin; left:3vmin; width:26vmin; height:26vmin; display:grid; grid-template-columns:1fr 1fr 1fr; grid-template-rows:1fr 1fr 1fr; gap:1.8vmin; }
+  .pad .btn { background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.18); border-radius:12px; display:flex; align-items:center; justify-content:center; font-weight:700; user-select:none; touch-action:none; color:#fff; }
+  .pad .btn:active { background:rgba(255,255,255,.16) }
+  @media (pointer:fine) { .pad { display:none; } } /* PCでは隠す */
+
+  /* 画面内ガイド用 */
+  .hud { position:fixed; left:50%; top:6%; transform:translateX(-50%); padding:8px 12px; background:rgba(0,0,0,.45); border:1px solid rgba(255,255,255,.25); border-radius:10px; font-weight:600; letter-spacing:.04em; opacity:0; transition:opacity .3s ease; pointer-events:none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<!-- スタート画面 -->
+<div class="center title" id="title">
+  <div>
+    <h1>ニコリヒトと伝説の泉</h1>
+    <div class="sub">— Prototype —</div>
+    <div class="press">Enter / Space / 画面タップ で開始</div>
+  </div>
+</div>
+
+<!-- プロローグ表示 -->
+<div class="center" id="prologue" style="display:none;">
+  <div class="prologueText" id="prologueText"></div>
+</div>
+
+<!-- フェード -->
+<div class="fade" id="fade"></div>
+
+<!-- 簡易Dパッド -->
+<div class="pad" id="pad" aria-hidden="true">
+  <div></div>                <div class="btn" data-dir="up">▲</div>     <div></div>
+  <div class="btn" data-dir="left">◀</div> <div></div> <div class="btn" data-dir="right">▶</div>
+  <div></div>                <div class="btn" data-dir="down">▼</div>   <div></div>
+</div>
+
+<!-- ガイドテキスト -->
+<div class="hud" id="hud"></div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; }
+  addEventListener('resize', resize, {passive:true}); resize();
+
+  // ===== Game State =====
+  const STATE = { TITLE:0, PROLOGUE:1, PLAYING:2 };
+  let state = STATE.TITLE;
+
+  // ===== Input =====
+  const keys = {up:false,down:false,left:false,right:false};
+  addEventListener('keydown', e=>{
+    const k = e.key.toLowerCase();
+    if(state===STATE.TITLE && (k==='enter'||k===' ')) startPrologue();
+    else if(state===STATE.PROLOGUE && (k==='enter'||k===' ')) advancePrologue();
+    if(k==='arrowup'||k==='w') keys.up=true;
+    if(k==='arrowdown'||k==='s') keys.down=true;
+    if(k==='arrowleft'||k==='a') keys.left=true;
+    if(k==='arrowright'||k==='d') keys.right=true;
+  });
+  addEventListener('keyup', e=>{
+    const k = e.key.toLowerCase();
+    if(k==='arrowup'||k==='w') keys.up=false;
+    if(k==='arrowdown'||k==='s') keys.down=false;
+    if(k==='arrowleft'||k==='a') keys.left=false;
+    if(k==='arrowright'||k==='d') keys.right=false;
+  });
+  addEventListener('pointerdown', () => {
+    if(state===STATE.TITLE) startPrologue();
+    else if(state===STATE.PROLOGUE) advancePrologue();
+  });
+
+  // D-pad
+  const pad = document.getElementById('pad');
+  for(const b of pad.querySelectorAll('.btn')){
+    const dir = b.dataset.dir;
+    b.addEventListener('pointerdown', e=>{ e.preventDefault(); b.setPointerCapture(e.pointerId); keys[dir]=true; });
+    const off = ()=>{ keys[dir]=false; };
+    b.addEventListener('pointerup', off); b.addEventListener('pointercancel', off); b.addEventListener('pointerout', off);
+  }
+
+  // ===== Prologue (typewriter) =====
+  const prologueLines = [
+    "……静かな夜。",
+    "伝説の泉の水が、消えた。",
+    "親友たちは——姿を消した。",
+    "ニコリヒトの胸は、不安でざわついた。",
+    "それでも、立ち止まるわけにはいかない。"
+  ];
+  let lineIdx = 0, typer = {i:0, text:"", speed:28, acc:0};
+
+  function startPrologue(){
+    document.getElementById('title').style.display = 'none';
+    document.getElementById('prologue').style.display = 'flex';
+    state = STATE.PROLOGUE;
+    lineIdx = 0; typer.i=0; typer.text=""; typer.acc=0;
+    typeNextLine();
+  }
+  function typeNextLine(){
+    typer.text = prologueLines[lineIdx]; typer.i = 0; typer.acc = 0;
+    document.getElementById('prologueText').textContent = "";
+  }
+  function advancePrologue(){
+    const el = document.getElementById('prologueText');
+    if(typer.i < typer.text.length){ el.textContent = typer.text; typer.i = typer.text.length; return; }
+    lineIdx++;
+    if(lineIdx >= prologueLines.length){ fadeToPlay(); } else { typeNextLine(); }
+  }
+  function updatePrologue(dt){
+    const el = document.getElementById('prologueText');
+    typer.acc += dt * typer.speed;
+    while(typer.acc >= 1 && typer.i < typer.text.length){
+      typer.acc -= 1; typer.i++; el.textContent = typer.text.slice(0, typer.i);
+    }
+  }
+
+  // ===== Fade =====
+  const fadeEl = document.getElementById('fade');
+  function fadeToPlay(){
+    fadeEl.style.opacity = 1;
+    setTimeout(()=>{
+      document.getElementById('prologue').style.display = 'none';
+      startPlay();
+      setTimeout(()=>{ fadeEl.style.opacity = 0; }, 120);
+    }, 420);
+  }
+
+  // ===== Map (vertical corridor centered path) =====
+  const TILE = 32;
+  const MAP_W = 15, MAP_H = 60; // 縦長
+  const T = { FLOOR:0, WALL:1, BLOCK:2 };
+  const map = Array.from({length:MAP_H},()=>Array(MAP_W).fill(T.WALL));
+  const mid = Math.floor(MAP_W/2);
+  // 中央の道（幅5）
+  for(let y=0;y<MAP_H;y++) for(let x=mid-2; x<=mid+2; x++) map[y][x] = T.FLOOR;
+  // 障害物（ブロック）を配置：上へ進むほど数回回避させる
+  function placeGate(y, openX){
+    for(let x=mid-2; x<=mid+2; x++) map[y][x] = (x===openX? T.FLOOR : T.BLOCK);
+  }
+  placeGate(MAP_H-12, mid-1); // 左にずれる
+  placeGate(MAP_H-24, mid+1); // 右にずれる
+  placeGate(MAP_H-36, mid   ); // 真ん中だけ通す
+  placeGate(MAP_H-48, mid+2); // 右端だけ
+
+  // 仮タイル色
+  const COLORS = { [T.FLOOR]:'#39464e', [T.WALL]:'#14181b', [T.BLOCK]:'#6b6f76' };
+
+  // Player（下の方からスタート）
+  const player = { px: mid*TILE + TILE/2, py: (MAP_H-3)*TILE + TILE/2, speed: 36, r: TILE*0.42 };
+
+  // 視界（暗闇弱め：周囲が少し見える）
+  function drawDarkMask(){
+    ctx.save();
+    // 全体をやや暗く（以前より明るめ）
+    ctx.fillStyle = 'rgba(0,0,0,.55)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    const radius = TILE*4.2; // 視界広く
+    const sx = player.px - camera.x;
+    const sy = player.py - camera.y;
+    const g = ctx.createRadialGradient(sx, sy, radius*0.55, sx, sy, radius);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(0,0,0,0.55)');
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(sx, sy, radius, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  // Collision
+  function isWalkable(nx, ny){
+    const tx = Math.floor(nx / TILE), ty = Math.floor(ny / TILE);
+    if(tx<0||ty<0||tx>=MAP_W||ty>=MAP_H) return false;
+    const t = map[ty][tx];
+    return t === T.FLOOR; // BLOCKは通れない
+  }
+
+  // Camera
+  const camera = { x:0, y:0, w:canvas.width, h:canvas.height };
+  function updateCamera(){
+    camera.w = canvas.width; camera.h = canvas.height;
+    const px = player.px, py = player.py;
+    camera.x = Math.max(0, Math.min(px - camera.w/2, MAP_W*TILE - camera.w));
+    camera.y = Math.max(0, Math.min(py - camera.h/2, MAP_H*TILE - camera.h));
+  }
+
+  // Start play
+  function startPlay(){ state = STATE.PLAYING; document.getElementById('pad').setAttribute('aria-hidden','false'); showHint("上へ進もう（↑ / W）"); }
+
+  // Hints (guide text)
+  const hud = document.getElementById('hud');
+  let hintTimer = 0;
+  function showHint(text, sec=2.6){ hud.textContent = text; hud.style.opacity = 1; hintTimer = sec; }
+
+  function updateHints(){
+    // プレイヤーのY位置に応じてチュートリアル文言
+    const ty = Math.floor(player.py / TILE);
+    if(ty === MAP_H-14) showHint('障害物は左右で避けよう（←→ / A D）');
+    if(ty === MAP_H-26) showHint('道は真ん中。焦らずゆっくり');
+    if(ty === MAP_H-38) showHint('行き止まりに見えたら、開いているマスを探そう');
+    if(ty === MAP_H-50) showHint('暗い道では周りをよく見よう');
+  }
+
+  // Update (playing)
+  function update(dt){
+    if(state===STATE.PROLOGUE){ updatePrologue(dt); return; }
+    if(state!==STATE.PLAYING) return;
+
+    // ヒント表示時間を管理
+    if(hintTimer>0){ hintTimer -= dt; if(hintTimer<=0){ hud.style.opacity = 0; } }
+
+    updateHints();
+
+    // 上方向優先（チュートリアル導線）
+    let dx=0, dy=0;
+    if(keys.up) dy=-1; else if(keys.down) dy=1; else if(keys.left) dx=-1; else if(keys.right) dx=1;
+
+    const dist = player.speed * dt;
+    const nx = player.px + dx*dist, ny = player.py + dy*dist;
+    if(isWalkable(nx, player.py)) player.px = nx;
+    if(isWalkable(player.px, ny)) player.py = ny;
+  }
+
+  // Draw map & player
+  function drawMap(){
+    const sx = Math.floor(camera.x / TILE)-1, sy = Math.floor(camera.y / TILE)-1;
+    const ex = Math.floor((camera.x + camera.w) / TILE)+1, ey = Math.floor((camera.y + camera.h) / TILE)+1;
+    for(let y=Math.max(0,sy); y<Math.min(MAP_H,ey); y++){
+      for(let x=Math.max(0,sx); x<Math.min(MAP_W,ex); x++){
+        const t = map[y][x];
+        ctx.fillStyle = (t===T.FLOOR)? '#3b4b54' : (t===T.BLOCK? '#6b6f76' : '#14181b');
+        ctx.fillRect(x*TILE - camera.x, y*TILE - camera.y, TILE, TILE);
+      }
+    }
+  }
+  function drawPlayer(){
+    const x = player.px - camera.x, y = player.py - camera.y;
+    ctx.save(); ctx.translate(x,y);
+    ctx.beginPath(); ctx.fillStyle = '#ffeb3b'; ctx.arc(0,0, player.r, 0, Math.PI*2); ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = '#000';
+    ctx.beginPath(); ctx.arc(-6, -4, 3, 0, Math.PI*2); ctx.arc(6, -4, 3, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, 7, 8, 0, Math.PI); ctx.stroke();
+    ctx.restore();
+  }
+
+  // Main loop
+  let last = performance.now()/1000;
+  function loop(ms){
+    const now = ms/1000; const dt = Math.min(0.033, now - last); last = now;
+    update(dt); updateCamera();
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    if(state===STATE.TITLE){ ctx.fillStyle = '#101214'; ctx.fillRect(0,0,canvas.width,canvas.height); }
+    else { drawMap(); drawPlayer(); drawDarkMask(); }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
